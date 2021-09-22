@@ -7,16 +7,16 @@ You may have been in the situation where you copied a huge file across a rather 
 
 This script basically does option 2, but then more efficiently and as automatically as possible. How to use it:
 1. Run the script with the damaged file as argument.
-   This produces a `checksums.txt` file. Copy over that file to where the undamaged original is.
-2. Run the script with the original file as argument.
+   This produces a `checksums.txt` file. Copy over this file to where the undamaged original is.
+2. Run the script with `-c` and the original file as argument.
    This compares blocks of the file with the values in `checksums.txt`. If a block differs, it extracts it from the original file. The extracted blocks all have file names like `BLOCK_100`.
    It also prints the command to be executed in the next step. The command will also have a truncate argument in case the damaged file somehow is bigger than the original.
-3. Copy the `BLOCK_*` files, as well as the command to be executed, back to where the damaged file is. Then run the command with the appropriate file name.
+3. Copy the `BLOCK_*` files, as well as the command given in the previous step, back to where the damaged file is. Then run the command with the appropriate file name.
 4. The damaged file should now be repaired.
 
 The script has some extra options to override the checksums file name and block size, run it with `-h` for usage instructions.
 
-Currently this requires the GNU flavour of the `dd` command, and it also needs the `md5sums` command to be available. I might update it to also work with BSD style `dd` and `md5` in the future, which will make it easier to use on e.g. Mac OS.
+This should work on any system that has either the GNU or BSD flavour of the `dd` and `stat` commands. It also needs either the `md5sums` or `md5` command. This means it should work on every recent Linux and also on Mac OS (X).
 
 The script relies on MD5 sums which should be adequate for this purpose. If you are extremely unlucky, the file corruption in a certain block could be such that it causes an md5 collision, but this is extremely unlikely. I might update the script to allow using other checksums in the future. Of course, if anyone else feels like doing this, pull requests are welcome.
 

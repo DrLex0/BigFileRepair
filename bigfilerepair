@@ -1,8 +1,7 @@
 #!/bin/bash
-# Big file repair tool 1.0 by Alexander Thomas.
+# Big file repair tool 1.1 by Alexander Thomas.
 #
-# Requires `md5sum` and GNU style `dd` commands.
-# (TODO: auto-detect BSD style dd and switch to `md5` if available.)
+# Should work on GNU and BSD (like Mac OS) systems.
 #
 # BSD 2-Clause License
 #
@@ -30,7 +29,7 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-VERSION='1.0'
+VERSION='1.1'
 PROG_NAME=$(basename "$0")
 
 function usage()
@@ -60,7 +59,7 @@ __END__
 }
 
 # Size of blocks in MiB in which we will split up the big file.
-# Do all dd operations with bs=1M.
+# Do all dd operations with a 1 MiB block size.
 CHUNK_MiB=100
 SUMS_FILE='checksums.txt'
 verify=''
@@ -123,15 +122,60 @@ if [ -n "${TRUNC_BYTES}" ] && ! strict_pos_int "${TRUNC_BYTES}"; then
 	echo "ERROR: value following -t must be a strict positive integer." 1>&2
 	exit 2
 fi
-
-
 if [ ! -f "${BIGFILE}" -o ! -r "${BIGFILE}" ]; then
 	echo "ERROR: no such file or not readable: ${BIGFILE}" 1>&2
 	exit 2
 fi
 
-total_size=$(stat -c '%s' "${BIGFILE}")
 
+# Auto-detect tool variants
+
+MD5_CMD=''
+if [ "$(echo 'test' | md5sum 2>/dev/null | awk '{print $1}')" = 'd8e8fca2dc0f896fd7cb4cb0031ba249' ]; then
+	MD5_CMD='md5sum'
+elif [ "$(echo 'test' | md5 2>/dev/null | awk '{print $1}')" = 'd8e8fca2dc0f896fd7cb4cb0031ba249' ]; then
+	MD5_CMD='md5'
+else
+	echo "ERROR: no md5 sum command found. Provide either 'md5sum' or 'md5'." 1>&2
+	exit 4
+fi
+[ -n "${DEBUG}" ] && echo "Using md5 command: '${MD5_CMD}'"
+
+total_size=$(stat -c '%s' "${BIGFILE}" 2>/dev/null)
+if [ $? = 0 ]; then
+	[ -n "${DEBUG}" ] && echo "GNU flavor of stat detected"
+else
+	total_size=$(stat -f '%z' "${BIGFILE}" 2>/dev/null)
+	if [ $? = 0 ]; then
+		[ -n "${DEBUG}" ] && echo "BSD flavor of stat detected"
+	else
+		echo "ERROR: 'stat' command fails or is an unknown variety." 1>&2
+		exit 4
+	fi
+fi
+
+if dd if=/dev/zero of=/dev/null bs=1K count=1 status=none 2>/dev/null; then
+	DD_FLAVOR='GNU'
+	[ -n "${DEBUG}" ] && echo "GNU flavor of dd detected"
+else
+	if ! dd if=/dev/zero of=/dev/null bs=1k count=1 2>/dev/null; then
+		echo "ERROR: variant of dd is unknown." 1>&2
+		exit 4
+	fi
+	DD_FLAVOR='BSD'
+	[ -n "${DEBUG}" ] && echo "BSD flavor of dd detected"
+fi
+
+
+function run_dd
+{
+	if [ "${DD_FLAVOR}" = 'GNU' ]; then
+		dd bs=1M status=none "$@"
+	else
+		# BSD dd has no option to mute output, so hide stderr entirely (not ideal)
+		dd bs=1m "$@" 2>/dev/null
+	fi
+}
 
 function join_array
 {
@@ -179,7 +223,7 @@ function checksum_damaged
 		if [ "${remaining}" -lt "${chunk_bytes}" ]; then
 			this_chunk=$remaining
 		fi
-		md5=$(dd if="${BIGFILE}" bs=1M count=$CHUNK_MiB skip=$seek status=none | md5sum | awk '{print $1}')
+		md5=$(run_dd if="${BIGFILE}" count=$CHUNK_MiB skip=$seek | $MD5_CMD | awk '{print $1}')
 		echo "${md5} ${seek}" | tee -a $SUMS_FILE
 		seek=$(( $seek + $CHUNK_MiB ))
 		remaining=$(( $remaining - $this_chunk ))
@@ -219,13 +263,13 @@ function compare_with_original
 		if [ "${remaining}" -lt "${chunk_bytes}" ]; then
 			this_chunk=$remaining
 		fi
-		md5=$(dd if="${BIGFILE}" bs=1M count=$CHUNK_MiB skip=$seek status=none | md5sum | awk '{print $1}')
+		md5=$(run_dd if="${BIGFILE}" count=$CHUNK_MiB skip=$seek | $MD5_CMD | awk '{print $1}')
 		dmg_md5=$(awk '{print $1}' <<<"${dmg_sums[$idx]}")
-		[ -n "$DEBUG" ] && echo "${idx} ${seek}: ORIG ${md5}, DMG ${dmg_md5}"
+		[ -n "${DEBUG}" ] && echo "${idx} ${seek}: ORIG ${md5}, DMG ${dmg_md5}"
 		if [ "${md5}" != "${dmg_md5}" ]; then
-			[ -n "$DEBUG" ] && echo "Bad: ${seek}"
+			[ -n "${DEBUG}" ] && echo '  Bad'
 			broken+=($seek)
-			dd if="${BIGFILE}" of="BLOCK_${seek}" bs=1M count=$CHUNK_MiB skip=$seek status=none
+			run_dd if="${BIGFILE}" of="BLOCK_${seek}" count=$CHUNK_MiB skip=$seek
 		else
 			anything_good=1
 		fi
@@ -266,7 +310,7 @@ function inject_blocks
 			exit 3
 		fi
 		# 'seek' to jump to output position, conv=notrunc to avoid truncating
-		dd if="BLOCK_${position}" of="${BIGFILE}" bs=1M count=$CHUNK_MiB seek=$position conv=notrunc status=none
+		run_dd if="BLOCK_${position}" of="${BIGFILE}" count=$CHUNK_MiB seek=$position conv=notrunc
 		echo "Injected block at position ${position}"
 	done
 }
